@@ -108,7 +108,7 @@ Answer Cryptoway with `$event->getHttpStatus()`:
 | Status | When |
 | --- | --- |
 | `200` | accepted, or a repeat of an event you already applied |
-| `400` | stale timestamp, body that is not JSON, no id or status in it |
+| `400` | stale or malformed timestamp, empty body, body that is not JSON |
 | `401` | signature missing or wrong |
 | `413` | body over 64 KB |
 | `503` | no callback key stored yet, or you could not do the work |
