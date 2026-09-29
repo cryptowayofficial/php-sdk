@@ -1,0 +1,11 @@
+/vendor/
+/composer.lock
+/.tests-run/
+/.phpunit.cache/
+/.phpunit.result.cache
+/phpunit.xml
+/build/
+/coverage/
+.DS_Store
+Thumbs.db
+*.log
