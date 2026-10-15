@@ -71,7 +71,113 @@ if ('GET' === $method && '/user/profile/' === $path) {
 	reply(200, ['id' => 1001, 'email' => 'owner@shop.example.com', 'telegram_username' => 'shop_owner', 'callback_key' => (string)($control['callback_key'] ?? 'callback-key-for-tests')]);
 }
 
+if ('GET' === $method && '/symbol/' === $path) {
+	listSymbols($control, $query);
+}
+
+if ('POST' === $method && '/user/address/' === $path) {
+	createAddress($dir, $raw_body);
+}
+
+if ('GET' === $method && '/user/address/' === $path) {
+	listAddresses($dir, $query);
+}
+
 reply(404, ['detail' => 'Not found.']);
+
+/**
+ * GET /symbol/ — a paginated list. control.symbols replaces the default set,
+ * control.symbols_per_page the page size (so pagination can be exercised).
+ */
+function listSymbols(array $control, string $query): void {
+	parse_str($query, $q);
+
+	$all = $control['symbols'] ?? [
+		['id' => 'USDTBEP20', 'name' => 'Tether BEP-20', 'short_name' => 'USDT', 'blockchain' => ['id' => 'BEP20', 'name' => 'BNB Smart Chain'], 'is_active' => true, 'is_virtual' => false, 'precision' => 2],
+		['id' => 'USDTTRC20', 'name' => 'Tether TRC-20', 'short_name' => 'USDT', 'blockchain' => ['id' => 'TRC20', 'name' => 'TRON'], 'is_active' => true, 'is_virtual' => false, 'precision' => 6],
+		['id' => 'BTC', 'name' => 'Bitcoin', 'short_name' => 'BTC', 'blockchain' => ['id' => 'BTC', 'name' => 'Bitcoin'], 'is_active' => true, 'is_virtual' => false, 'precision' => 8],
+		['id' => 'USDT', 'name' => 'Tether', 'short_name' => 'USDT', 'blockchain' => null, 'is_active' => true, 'is_virtual' => true, 'precision' => 2],
+		['id' => 'DOGE', 'name' => 'Dogecoin', 'short_name' => 'DOGE', 'blockchain' => ['id' => 'DOGE', 'name' => 'Dogecoin'], 'is_active' => false, 'is_virtual' => false, 'precision' => 8],
+	];
+
+	$per_page = max(1, (int)($control['symbols_per_page'] ?? ($q['per_page'] ?? 100)));
+	$page = max(1, (int)($q['page'] ?? 1));
+	$pages = max(1, (int)ceil(count($all) / $per_page));
+
+	reply(200, [
+		'data'         => array_values(array_slice($all, ($page - 1) * $per_page, $per_page)),
+		'pages_count'  => $pages,
+		'current_page' => $page,
+		'total'        => count($all),
+	]);
+}
+
+/** POST /user/address/ — a permanent address; the real API refuses a virtual symbol. */
+function createAddress(string $dir, string $raw_body): void {
+	$params = json_decode($raw_body, true);
+
+	if (!is_array($params)) {
+		reply(400, ['detail' => 'Invalid JSON body']);
+	}
+
+	$symbol = (string)($params['symbol_id'] ?? '');
+
+	if ('' === $symbol) {
+		reply(422, ['detail' => ['symbol_id' => ['This field is required.']]]);
+	}
+
+	if (in_array($symbol, ['USDT', 'USDC'], true)) {
+		reply(422, ['detail' => ['symbol_id' => ['Virtual symbol is not allowed.']]]);
+	}
+
+	$id = count((array)glob($dir . '/addr_*.json')) + 1;
+
+	$address = [
+		'id'           => $id,
+		'value'        => '0x' . bin2hex(random_bytes(20)),
+		'description'  => (string)($params['description'] ?? ''),
+		'symbol_id'    => $symbol,
+		'user_id'      => '1001',
+		'callback_url' => (string)($params['callback_url'] ?? ''),
+		'external_id'  => isset($params['external_id']) ? (string)$params['external_id'] : null,
+		'created_at'   => gmdate('Y-m-d\TH:i:s\Z'),
+	];
+
+	file_put_contents($dir . '/addr_' . $id . '.json', (string)json_encode($address));
+
+	reply(200, $address);
+}
+
+/** GET /user/address/ — the stored addresses, filtered by symbol_id and search_query. */
+function listAddresses(string $dir, string $query): void {
+	parse_str($query, $q);
+
+	$items = [];
+
+	foreach ((array)glob($dir . '/addr_*.json') as $file) {
+		$address = json_decode((string)file_get_contents((string)$file), true);
+
+		if (!is_array($address)) {
+			continue;
+		}
+
+		if (!empty($q['symbol_id']) && $address['symbol_id'] !== $q['symbol_id']) {
+			continue;
+		}
+
+		$needle = (string)($q['search_query'] ?? '');
+
+		if ('' !== $needle && !str_contains((string)$address['external_id'] . ' ' . $address['description'] . ' ' . $address['value'], $needle)) {
+			continue;
+		}
+
+		$items[] = $address;
+	}
+
+	usort($items, static fn (array $a, array $b): int => $a['id'] <=> $b['id']);
+
+	reply(200, ['data' => $items, 'pages_count' => 1, 'current_page' => 1, 'total' => count($items)]);
+}
 
 // Handlers
 
@@ -101,7 +207,9 @@ function createInvoice(string $dir, array $control, string $raw_body): void {
 
 	$rate = (float)($control['rate'] ?? 1.0);
 	$precision = (int)($control['precision'] ?? 2);
-	$symbol = (string)($control['symbol_id'] ?? 'USDTBEP20');
+	// A symbol sent at creation is kept, the way the real API does; otherwise the
+	// stub assumes the buyer picked USDT BEP-20, so amount tests have a coin to work with.
+	$symbol = (string)($control['symbol_id'] ?? ($params['symbol_id'] ?? 'USDTBEP20'));
 	$id = 'inv_' . bin2hex(random_bytes(8));
 	$fiat = (float)$params['target_value_fiat'];
 	$now = gmdate('Y-m-d\TH:i:s\Z');

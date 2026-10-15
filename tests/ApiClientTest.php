@@ -260,4 +260,84 @@ final class ApiClientTest extends TestCase {
 		$this->assertFalse(ApiClient::payUrlIsTrusted('https://cryptoway.com.evil.test/invoice/inv_1'));
 		$this->assertFalse(ApiClient::payUrlIsTrusted('https://evil.test/invoice/inv_1'));
 	}
+
+	// Paying on the merchant's own page: the coin list and an invoice with a coin chosen up front.
+
+	public function testSymbolsComeWithoutVirtualAndInactiveOnes(): void {
+		$symbols = $this->client()->getSymbols();
+
+		$this->assertIsArray($symbols);
+
+		$ids = array_column($symbols, 'id');
+
+		$this->assertContains('USDTBEP20', $ids);
+		$this->assertContains('BTC', $ids);
+		$this->assertNotContains('USDT', $ids, 'a coin without a network cannot be paid to');
+		$this->assertNotContains('DOGE', $ids, 'inactive symbols are left out');
+	}
+
+	public function testEveryPageOfSymbolsIsRead(): void {
+		self::$stub->control(['symbols_per_page' => 2]);
+
+		$symbols = $this->client()->getSymbols();
+
+		$this->assertIsArray($symbols);
+		$this->assertCount(3, $symbols, 'three payable symbols spread over three pages');
+		$this->assertCount(3, self::$stub->requests(), 'one request per page');
+	}
+
+	public function testAnInvoiceWithASymbolCarriesTheAddressRightAway(): void {
+		$invoice = $this->client()->createInvoice($this->invoiceParams(['symbol_id' => 'USDTTRC20']));
+
+		$this->assertIsArray($invoice);
+		$this->assertSame('USDTTRC20', $invoice['symbol_id']);
+		$this->assertNotSame('', (string)($invoice['target_wallet']['value'] ?? ''), 'the address to show on the page');
+		$this->assertStringContainsString('"symbol_id":"USDTTRC20"', self::$stub->requests()[0]);
+	}
+
+	// Permanent addresses: one per customer, any amount, each transfer its own webhook.
+
+	public function testAPermanentAddressIsCreatedForACustomer(): void {
+		$address = $this->client()->createAddress([
+			'symbol_id'    => 'usdtbep20',
+			'external_id'  => 'customer-42',
+			'callback_url' => 'https://shop.example.com/topup',
+		]);
+
+		$this->assertIsArray($address, 'a rejected signature would have come back as an ApiError');
+		$this->assertSame('USDTBEP20', $address['symbol_id'], 'the symbol is sent upper-case');
+		$this->assertSame('customer-42', $address['external_id']);
+		$this->assertStringStartsWith('0x', $address['value']);
+		$this->assertStringContainsString('"callback_url":"https://shop.example.com/topup"', self::$stub->requests()[0]);
+	}
+
+	public function testAnAddressWithoutASymbolNeverLeavesTheProcess(): void {
+		$result = $this->client()->createAddress(['external_id' => 'customer-42']);
+
+		$this->assertInstanceOf(ApiError::class, $result);
+		$this->assertSame('bad_symbol_id', $result->getCode());
+		$this->assertCount(0, self::$stub->requests());
+	}
+
+	public function testAVirtualSymbolIsRefusedByTheApi(): void {
+		$result = $this->client()->createAddress(['symbol_id' => 'USDT']);
+
+		$this->assertInstanceOf(ApiError::class, $result);
+		$this->assertSame(422, $result->getStatus());
+		$this->assertCount(1, self::$stub->requests(), 'a refused create is not repeated');
+	}
+
+	public function testAddressesAreListedByCustomer(): void {
+		$client = $this->client();
+
+		$client->createAddress(['symbol_id' => 'USDTBEP20', 'external_id' => 'customer-7']);
+		$client->createAddress(['symbol_id' => 'USDTTRC20', 'external_id' => 'customer-8']);
+
+		$list = $client->listAddresses(['search_query' => 'customer-7']);
+
+		$this->assertIsArray($list);
+		$this->assertCount(1, $list['data']);
+		$this->assertSame('customer-7', $list['data'][0]['external_id']);
+		$this->assertStringContainsString('/user/address/?search_query=customer-7', self::$stub->requests()[2]);
+	}
 }

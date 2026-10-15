@@ -1,6 +1,6 @@
 {
     "name": "cryptoway/php-sdk",
-    "description": "PHP SDK for the Cryptoway crypto payment gateway: request-signing, invoice creation, webhook verification and the money rules the shop plugins run on.",
+    "description": "PHP SDK for the Cryptoway crypto payment gateway: invoices paid on Cryptoway's page or on your own, permanent deposit addresses per customer, webhook checks and the money rules the shop plugins use.",
     "type": "library",
     "keywords": [
         "cryptoway",

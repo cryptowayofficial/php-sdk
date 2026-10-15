@@ -1,12 +1,30 @@
 # Cryptoway PHP SDK
 
-PHP client for the [Cryptoway](https://cryptoway.com) crypto payment gateway: signed API requests,
-invoices, webhook checks and the amount rules the Cryptoway shop plugins use.
+Take crypto payments on a PHP site through the [Cryptoway](https://cryptoway.com) gateway.
 
-Checking an incoming webhook is part of the package: freshness, signature and replay in one call.
-So are the rules that decide whether an invoice was actually paid, where an underpayment stays an
-underpayment. The same code runs the Cryptoway extensions for OpenCart, PrestaShop and
-BILLmanager. The test suite runs on PHP 8.1 to 8.5.
+## What you get
+
+Three ways to take money:
+
+- **Payment page.** You create an invoice, the buyer pays on Cryptoway's page: picks a coin, sees the
+  address and the QR code. The least code on your side.
+- **On your own page.** The buyer picks the coin on your site and gets the address and the exact
+  amount at once. Nobody leaves your checkout; the screen is yours.
+- **A permanent address per customer.** For balances and top-ups: one address for ever, any amount,
+  every transfer reported to you with the customer's id.
+
+And the part that is the same in all three:
+
+- Signed API requests, with timeouts, retries where they are safe and errors that come back as values
+  instead of exceptions, so a webhook handler always finishes its work.
+- Webhook checks in one call: freshness, signature and replay. A forged, stale or repeated
+  notification is refused with the right HTTP status.
+- The money rules: an underpayment is never a payment, an overpayment is reported, an expired invoice
+  that received coins goes to a person instead of being cancelled, and a transfer is credited once.
+- Explained error messages for the cases merchants actually hit, ready for translation.
+
+The same code runs the Cryptoway extensions for OpenCart, PrestaShop and BILLmanager. The test suite
+runs on PHP 8.1 to 8.5.
 
 ## Install
 
@@ -65,7 +83,58 @@ A new invoice has no coin yet: `symbol_id` and `target_value_symbol` stay empty 
 picks a coin and network on the payment page. The invoice can also ask for more than the order
 total when the project adds a markup or charges the buyer the fee.
 
-Two runnable scripts are in [`examples/`](examples): `create_invoice.php` and `handle_webhook.php`.
+Three runnable scripts are in [`examples/`](examples): `create_invoice.php`, `handle_webhook.php`
+and `pay_on_site.php`.
+
+## Pay on your own page
+
+You do not have to send the buyer to Cryptoway. Let them pick the coin on your page, create the
+invoice with that coin, and show the address and the amount yourself:
+
+```php
+$symbols = $api->getSymbols();             // coins and networks that can be paid with right now
+
+// ...the buyer picks one; its `id` (USDTBEP20, BTC, ...) comes back from your form:
+$invoice = $api->createInvoice([
+    'name'                 => 'Order 1042',
+    'target_value_fiat'    => 30.26,
+    'target_currency_fiat' => 'EUR',
+    'symbol_id'            => $_POST['coin'],
+    'external_id'          => '1042-' . bin2hex(random_bytes(8)),
+    'callback_url'         => 'https://shop.example.com/cryptoway/webhook',
+]);
+
+$invoice['target_wallet']['value'];        // the address: put it in a QR code
+$invoice['target_value_symbol'];           // the exact amount to send, fees and markup included
+$invoice['deadline_at'];                   // until when
+```
+
+`getSymbols()` reads every page of `GET /symbol/` and leaves out what cannot be paid to: virtual
+entries (a coin with no network, like `USDT`) and inactive ones. `Coins::label()` turns an id into
+`USDT BEP-20` for the picker.
+
+Everything after that is the same as with the payment page: the deposit webhook names the invoice,
+you read it back and check `Amounts::invoiceIsCovered()` before releasing the goods.
+
+## Permanent addresses
+
+For balances and top-ups rather than orders: one address per customer, any amount, no deadline.
+Every transfer to it arrives as its own deposit webhook.
+
+```php
+$address = $api->createAddress([
+    'symbol_id'    => 'USDTBEP20',
+    'external_id'  => 'customer-42',                      // your id, echoed in every webhook
+    'callback_url' => 'https://shop.example.com/cryptoway/topup',
+]);
+
+$address['value'];                         // store it on the customer together with $address['id']
+```
+
+Keep the address on your side; `listAddresses()` is there for reconciliation, not for lookups on
+every page view. When a deposit webhook arrives, credit the customer named by `external_id` with
+`amount` once the status is `executed`, and never on `dirty_lock`. Use `blockchain_data.hash` as
+the key that stops the same transfer being credited twice.
 
 ## The webhook signature
 
@@ -169,7 +238,7 @@ than the order total is normal (project markup, buyer-paid network fee) and come
 
 | Class | Use |
 | --- | --- |
-| `ApiClient` | `createInvoice()`, `getInvoice()`, `getProfile()`, plus `payUrlIsTrusted()` and `urlIsLocal()` guards |
+| `ApiClient` | `createInvoice()`, `getInvoice()`, `getProfile()`, `getSymbols()`, `createAddress()`, `listAddresses()`, plus `payUrlIsTrusted()` and `urlIsLocal()` guards |
 | `ApiError` | a failed call, returned as a value |
 | `Webhook`, `WebhookResult` | checking an incoming notification |
 | `Signature` | signing and verification, if you need them directly |

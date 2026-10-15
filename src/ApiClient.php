@@ -41,6 +41,7 @@ class ApiClient {
 	public const MESSAGES = [
 		'error_api_unreachable'    => 'Could not reach Cryptoway at %s: %s',
 		'error_api_bad_invoice_id' => 'Unknown payment number: %s',
+		'error_api_bad_symbol_id'  => 'Unknown coin code "%s": pass the coin with its network, like USDTBEP20.',
 		'error_api_wrong_ip'       => 'Cryptoway rejects the keys from this server\'s IP address. A project\'s keys are bound to the first address they are used from. Use a separate project per store, or clear Allowed IPs in the project settings.',
 		'error_api_unauthorized'   => 'Cryptoway did not accept the keys. Check the Project ID and the Secret key, and make sure the project is active.',
 		'error_api_not_found'      => 'Cryptoway answered "not found". Usually the project cannot accept payments yet: check that it is active in the Cryptoway account.',
@@ -154,6 +155,78 @@ class ApiClient {
 		}
 
 		return $this->get('/invoice/my/' . rawurlencode($invoice_id) . '/');
+	}
+
+	/**
+	 * Coins and networks that can be paid with right now: every page of GET /symbol/,
+	 * without the virtual entries (a coin with no network, like USDT) and the inactive
+	 * ones. Each item keeps the API's fields; `id` is the symbol_id for createInvoice()
+	 * and createAddress().
+	 */
+	public function getSymbols(): array|ApiError {
+		$symbols = [];
+		$page = 1;
+
+		do {
+			$result = $this->get('/symbol/?page=' . $page . '&per_page=100');
+
+			if ($result instanceof ApiError) {
+				return $result;
+			}
+
+			$items = isset($result['data']) && is_array($result['data']) ? $result['data'] : $result;
+
+			foreach ($items as $item) {
+				if (is_array($item) && !empty($item['id']) && !empty($item['is_active']) && empty($item['is_virtual'])) {
+					$symbols[] = $item;
+				}
+			}
+
+			$pages = (int)($result['pages_count'] ?? 1);
+			++$page;
+		} while ($page <= $pages && $page <= 20);
+
+		return $symbols;
+	}
+
+	/**
+	 * A permanent deposit address: POST /user/address/. Keys: symbol_id (coin and
+	 * network, e.g. USDTBEP20); optional callback_url, external_id (your customer or
+	 * account id) and description. Every transfer to it arrives as a deposit webhook.
+	 */
+	public function createAddress(array $params): array|ApiError {
+		$symbol_id = strtoupper(self::cleanText((string)($params['symbol_id'] ?? '')));
+
+		if (!preg_match('/^[A-Z0-9]{2,32}$/', $symbol_id)) {
+			return new ApiError('bad_symbol_id', $this->translate('error_api_bad_symbol_id', [$symbol_id]));
+		}
+
+		$body = ['symbol_id' => $symbol_id];
+
+		foreach (['callback_url', 'external_id', 'description'] as $field) {
+			if (!empty($params[$field])) {
+				$body[$field] = self::cleanText((string)$params[$field]);
+			}
+		}
+
+		return $this->post('/user/address/', $body);
+	}
+
+	/**
+	 * Addresses created so far: GET /user/address/. Filters: symbol_id, search_query,
+	 * page, per_page. Returns the API's page as is: `data`, `pages_count`,
+	 * `current_page`, `total`.
+	 */
+	public function listAddresses(array $filters = []): array|ApiError {
+		$query = [];
+
+		foreach (['symbol_id', 'search_query', 'page', 'per_page'] as $field) {
+			if (isset($filters[$field]) && '' !== (string)$filters[$field]) {
+				$query[$field] = (string)$filters[$field];
+			}
+		}
+
+		return $this->get('/user/address/' . ([] === $query ? '' : '?' . http_build_query($query)));
 	}
 
 	/** Requests sent to Cryptoway in this PHP run. */
